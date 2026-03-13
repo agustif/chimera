@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { appRuntime, ExplorerConfig, SavedBlendStore } from './persistence';
+import { ExplorerConfig, SavedBlendStore, getAppServices } from './persistence';
 import { makeSeed, rerollTarget, selectActiveTargets } from './randomization';
 import type { AppState, BlendPoint, SavedBlendState } from './types';
 
@@ -168,4 +168,4 @@ export const removeSavedBlendState = (input: {
   });
 
 export const runSync = <A>(effect: Effect.Effect<A, never, SavedBlendStore | typeof ExplorerConfig>) =>
-  appRuntime.runSync(effect as never) as A;
+  Effect.runSync(Effect.provideServices(effect, getAppServices())) as A;

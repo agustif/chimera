@@ -1,4 +1,4 @@
-import { Effect, Layer, ManagedRuntime, Ref, Schema, ServiceMap } from 'effect';
+import { Effect, Ref, Schema, ServiceMap } from 'effect';
 import type { SavedBlendState } from './types';
 
 const BlendPointSchema = Schema.Struct({
@@ -56,57 +56,73 @@ export const ExplorerConfig = ServiceMap.Reference('ExplorerConfig', {
   }),
 });
 
-class BrowserStorage extends ServiceMap.Service<BrowserStorage, {
+export class BrowserStorage extends ServiceMap.Service<BrowserStorage, {
   readonly getItem: (key: string) => Effect.Effect<string | null>;
   readonly setItem: (key: string, value: string) => Effect.Effect<void>;
-}>()('BrowserStorage') {
-  static readonly layer = Layer.succeed(this)({
-    getItem: Effect.fn('BrowserStorage.getItem')((key) => Effect.sync(() => window.localStorage.getItem(key))),
-    setItem: Effect.fn('BrowserStorage.setItem')((key, value) => Effect.sync(() => window.localStorage.setItem(key, value))),
-  });
-}
+}>()('BrowserStorage') {}
 
 export class SavedBlendStore extends ServiceMap.Service<SavedBlendStore, {
   readonly all: Effect.Effect<SavedBlendState[]>;
   readonly save: (entry: SavedBlendState) => Effect.Effect<SavedBlendState[]>;
   readonly remove: (id: string) => Effect.Effect<SavedBlendState[]>;
-}>()('SavedBlendStore', {
-  make: Effect.gen(function* () {
-    const config = yield* ExplorerConfig;
-    const storage = yield* BrowserStorage;
-    const raw = yield* storage.getItem(config.storageKey);
-    const decoded = raw
-      ? yield* Effect.try({
-        try: () => Schema.decodeUnknownSync(SavedBlendStatesSchema)(JSON.parse(raw)),
-        catch: () => [] as SavedBlendState[],
-      })
-      : [];
-    const ref = yield* Ref.make(decoded);
+}>()('SavedBlendStore') {}
 
-    const persist = Effect.fn('SavedBlendStore.persist')(function* (next: SavedBlendState[]) {
-      yield* storage.setItem(config.storageKey, JSON.stringify(next));
-      return next;
-    });
+let cachedServices: ReturnType<typeof ServiceMap.empty> | null = null
 
-    return {
-      all: Ref.get(ref),
-      save: Effect.fn('SavedBlendStore.save')(function* (entry: SavedBlendState) {
-        yield* Ref.update(ref, (items) => [entry, ...items.filter((item) => item.id !== entry.id)].slice(0, config.maxSavedStates));
-        const next = yield* Ref.get(ref);
-        return yield* persist(next);
-      }),
-      remove: Effect.fn('SavedBlendStore.remove')(function* (id: string) {
-        yield* Ref.update(ref, (items) => items.filter((item) => item.id !== id));
-        const next = yield* Ref.get(ref);
-        return yield* persist(next);
-      }),
-    };
-  }),
-}) {}
+const makeServices = Effect.gen(function* () {
+  const config = ExplorerConfig.defaultValue()
+  const storage = {
+    getItem: Effect.fn('BrowserStorage.getItem')((key: string) =>
+      Effect.sync(() => window.localStorage.getItem(key))
+    ),
+    setItem: Effect.fn('BrowserStorage.setItem')((key: string, value: string) =>
+      Effect.sync(() => window.localStorage.setItem(key, value))
+    ),
+  }
 
-export const appLayer = Layer.mergeAll(
-  BrowserStorage.layer,
-  SavedBlendStore.layer,
-);
+  const raw = yield* storage.getItem(config.storageKey)
+  const decoded = raw
+    ? yield* Effect.try({
+      try: () => Schema.decodeUnknownSync(SavedBlendStatesSchema)(JSON.parse(raw)),
+      catch: () => [] as SavedBlendState[],
+    })
+    : []
 
-export const appRuntime = ManagedRuntime.make(appLayer);
+  const ref = yield* Ref.make(decoded)
+
+  const persist = Effect.fn('SavedBlendStore.persist')(function* (next: SavedBlendState[]) {
+    yield* storage.setItem(config.storageKey, JSON.stringify(next))
+    return next
+  })
+
+  const savedBlendStore = {
+    all: Ref.get(ref),
+    save: Effect.fn('SavedBlendStore.save')(function* (entry: SavedBlendState) {
+      yield* Ref.update(ref, (items) =>
+        [entry, ...items.filter((item) => item.id !== entry.id)].slice(
+          0,
+          config.maxSavedStates
+        )
+      )
+      const next = yield* Ref.get(ref)
+      return yield* persist(next)
+    }),
+    remove: Effect.fn('SavedBlendStore.remove')(function* (id: string) {
+      yield* Ref.update(ref, (items) => items.filter((item) => item.id !== id))
+      const next = yield* Ref.get(ref)
+      return yield* persist(next)
+    }),
+  }
+
+  return ServiceMap.mergeAll(
+    BrowserStorage.serviceMap(storage),
+    SavedBlendStore.serviceMap(savedBlendStore)
+  )
+})
+
+export const getAppServices = () => {
+  if (!cachedServices) {
+    cachedServices = Effect.runSync(makeServices)
+  }
+  return cachedServices
+}

@@ -58,6 +58,9 @@ export type InspirationTarget = {
   id: string;
   name: string;
   blurb: string;
+  imageUrl: string;
+  origin: string;
+  category: 'ui' | 'editorial' | 'mixed';
   swatches: [string, string];
   discrete: DiscreteTheme;
   tokens: ThemeTokens;
